@@ -3,7 +3,7 @@
 
 <language_definitions>
 
-   <language processor="Xilinx PicoBlaze"
+   <language processor="PicoBlaze"
             endian="big"
             size="24"
             variant="KCPSM3"
@@ -15,7 +15,7 @@
     <compiler name="default" spec="KCPSM3.cspec" id="default"/>
   </language> 
   
-      <language processor="Xilinx PicoBlaze"
+      <language processor="PicoBlaze"
             endian="big"
             size="24"
             variant="KCPSM6"

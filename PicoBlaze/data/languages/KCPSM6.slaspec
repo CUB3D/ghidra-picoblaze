@@ -1,19 +1,11 @@
 # Specification for the PicoBlaze KCPSM6 processor
+# Implementation based on this spec: https://web.archive.org/web/20240817205135/https://www.eng.auburn.edu/~nelsovp/courses/elec4200/PicoBlaze/kcpsm6.pdf
 
 # Known differences from actual KCPSM6:
-#TODO: is pc wrap still a thing
-#TODO: check shifts
-#TODO: Remove unused ops
-#SPEC: https://web.archive.org/web/20240817205135/https://www.eng.auburn.edu/~nelsovp/courses/elec4200/PicoBlaze/kcpsm6.pdf
+# - Stack overflows are not checked, on real implementations they cause a reset
+# - As in KCPSM3, PC wraparound is not supported
 
-define endian=big;
-define alignment=3;
-
-# This should be rom_space but thats not actually supported in the sleigh compiler
-define space rom            type=ram_space      size=3   wordsize=1 default;
-define space scratchpad     type=ram_space      size=1   wordsize=1;
-define space stack_buffer   type=ram_space      size=1   wordsize=1;
-define space register       type=register_space size=1;
+@include "picoblaze_common.sinc"
 
 
 define token opcode(24)
@@ -32,23 +24,17 @@ define token opcode(24)
 	op17=(17,17)
 ;
 
-define register offset=0x00 size=1 [
-	s0 s1 s2 s3 s4 s5 s6 s7 s8 s9 sA sB sC sD sE sF 
-    SP
-    flags
-];
-
-define bitrange Z=flags[0,1]
-                C=flags[1,1]
-;
 
 attach variables [ sX sY  ] [
 	s0 s1 s2 s3 s4 s5 s6 s7 s8 s9 sA sB sC sD sE sF
 ];
 
-define pcodeop enable_interrupt;
-define pcodeop disable_interrupt;
-define pcodeop todo; #TODO
+define bitrange regBank=flags[2,1];
+
+macro push(v) {
+	# In KCPSM6 stack overflow is a reset rather than a wraparound
+    *[stack_buffer]:2 SP = v;
+}
 
 # Loading
 
@@ -229,19 +215,30 @@ define pcodeop odd_parity;
 }
 
 :SR0 sX is opc=0x14 & sX & kk=0x0E {
-	todo();
+	C = sX & 1;
+    sX = sX >> 1;
+    Z = sX == 0;
 }
 :SR1 sX is opc=0x14 & sX & kk=0x0F {
-	todo();
+	Z = 0;
+    C = sX & 1;
+    sX = (0b10000000 | ( sX >> 1));
 }
 :SRX sX is opc=0x14 & sX & kk=0x0A {
-	todo();
+	C = sX & 1;
+    sX = (( sX & 0b10000000) | ( sX >> 1));
+    Z = sX == 0;
 }
 :SRA sX is opc=0x14 & sX & kk=0x08 {
-	todo();
+	local tmp:1 = sX & 1;
+    sX = (( C << 7) | ( sX >> 1));
+    C = tmp;
+    Z = sX == 0;
 }
 :RR sX is opc=0x14 & sX & kk=0x0C {
-	todo();
+	C = sX & 1;
+    sX = (( C << 7) | ( sX >> 1));
+    Z = sX == 0;
 }
 
 # Register Bank
@@ -283,19 +280,19 @@ define pcodeop output;
 # Scratch pad memory
 
 :STORE sX, sY is opc=0x2E & sX & sY & op0_3=0 {
-	todo();
+	*[scratchpad]:1 sX = sY;
 }
 
 :STORE sX, kk is opc=0x2F & sX & kk {
-	todo();
+	*[scratchpad]:1 kk:1 = sX;
 }
 
 :FETCH sX, sY is opc=0x0A & sX & sY & op0_3=0 {
-	todo();
+	sX = *[scratchpad]:1 sY;
 }
 
 :FETCH sX, kk is opc=0x0B & sX & kk {
-	todo();
+	sX = *[scratchpad]:1 kk:1;
 }
 
 # Interrupt handling
@@ -307,57 +304,89 @@ define pcodeop output;
     enable_interrupt();
 }
 
+# On interrupt Z, C and REGBANK are pushed with PC, on RETURNI they are restored
+# This simulates that, as we don't model the interrupt "push" side of this  
+define pcodeop restore_interrupt_flags;
 :RETURNI_DISABLE is ins=0x29000 {
-    todo();
+    SP = SP - 1;
+    local tmp:2 = *[stack_buffer]:2 SP;
+    disable_interrupt();
+    flags = restore_interrupt_flags();
+    return [tmp];
 }
-:RETURNI_DISABLE is ins=0x29001 {
-    todo();
+:RETURNI_ENABLE is ins=0x29001 {
+    SP = SP - 1;
+    local tmp:2 = *[stack_buffer]:2 SP;
+    enable_interrupt();
+    flags = restore_interrupt_flags();
+    return [tmp];
 }
 
 # Jump
 
-#TODO
-jcond:"Z" is op14_16=0b100 { local a:1 = todo(); export a; }
-jcond:"NZ" is op14_16=0b101 { local a:1 = todo(); export a; }
-jcond:"C" is op14_16=0b110 { local a:1 = todo(); export a; }
-jcond:"NC" is op14_16=0b111 { local a:1 = todo(); export a; }  
+jcond:"Z" is op14_16=0b100 { local a:1 = Z != 0; export a; }
+jcond:"NZ" is op14_16=0b101 { local a:1 = Z == 0; export a; }
+jcond:"C" is op14_16=0b110 { local a:1 = C != 0; export a; }
+jcond:"NC" is op14_16=0b111 { local a:1 = C == 0; export a; }  
 
-:JUMP aaa is op12_13=0b10 & op14_16=0b000 & op17=1 & aaa {
-	local a:3 = aaa;
+:JUMP tgt is op12_13=0b10 & op14_16=0b000 & op17=1 & aaa [tgt = aaa * 3;] {
+	local a:2 = tgt;
 	goto [a];
 }
-:JUMP jcond, aaa is op12_13=0b10 & jcond & op17=1 & aaa {
+:JUMP jcond, tgt is op12_13=0b10 & jcond & op17=1 & aaa [tgt = aaa * 3;]  {
 	if(jcond == 0) goto <end>;
-		local a:3 = aaa;
+		local a:2 = tgt;
 		goto [a];
 	<end>
 }
 :JUMP@ (sX, sY) is opc=0x26 & sX & sY & op0_3=0 {
-	todo();
+	local tmp:2 = zext(sY) | ((zext(sX) & 0xF) << 8);
+	tmp = tmp * 3;
+	goto [tmp];
 }
 
-:CALL aaa is op12_13=0b00 & op14_16=0b000 & op17=1 & aaa {
-	local a:3 = aaa;
-	call [a];
+:CALL tgt is op12_13=0b00 & op14_16=0b000 & op17=1 & aaa [tgt = aaa * 3;] {
+	local tmp:2 = inst_start;
+    push(tmp);
+    local a:2 = tgt;
+    call [a];
 }
-:CALL jcond, aaa is op12_13=0b00 & jcond & op17=1 & aaa {
+:CALL jcond, tgt is op12_13=0b00 & jcond & op17=1 & aaa [tgt = aaa * 3;] {
 	if(jcond == 0) goto <end>;
-		local a:3 = aaa;
-		call [a];
-	<end>
+	    local tmp:2 = inst_start;
+	    push(tmp);
+	    local a:2 = tgt;
+	    call [a];
+    <end>
 }
 :CALL@ (sX, sY) is opc=0x24 & sX & sY & op0_3=1 {
-	todo();
+	local tmp:2 = inst_start;
+    push(tmp);
+	local tmp2:2 = zext(sY) | ((zext(sX) & 0xF) << 8);
+	call [tmp2];
 }
 
 :RETURN is ins=0x25000 {
-	todo();
+    SP = SP - 1;
+    local tmp:2 = *[stack_buffer]:2 SP;
+    tmp = tmp + 3;
+    return [tmp];
 }
 :RETURN jcond is op12_13=0b01 & jcond & op17=1 & aaa=0 {
-	todo();
+	if(jcond == 0) goto <end>;
+        SP = SP - 1;
+        local tmp:2 = *[stack_buffer]:2 SP;
+        tmp = tmp + 3;
+        return [tmp];
+    <end>
 }
 :LOAD_RETURN sX, kk is opc=0x21 & sX & kk {
-	todo();
+	sX = kk;
+	
+	SP = SP - 1;
+    local tmp:2 = *[stack_buffer]:2 SP;
+    tmp = tmp + 3;
+    return [tmp];
 }
 
 # Version control
@@ -369,351 +398,3 @@ define pcodeop hwbuild;
 	sX = hwbuild();
 	Z = sX == 0;
 }
-
-
-#:JUMP@ (sX, sY) is opc=0x26 & sX & sY & op0_3=0 {
-#	todo();
-#}
-
-#
-#macro push(v) {
-#    *[stack_buffer]:2 SP = v;
-#    SP = (SP + 1) % 32;
-#}
-#
-## JUMP
-#
-#jtgt: tgt is op0_9 [ tgt = op0_9 * 3; ] {
-#    local addr:3 = tgt;
-#    export addr;
-#}
-#
-## Conditional
-#with jcond: op12=1 {
-#    :"Z"  is op10_11=0b00 {
-#        local v:1 = Z == 0;
-#        export v;
-#    }
-#    :"NZ"  is op10_11=0b01 {
-#        local v:1 = Z != 0;
-#        export v;
-#    }
-#    :"C"  is op10_11=0b10 {
-#        local v:1 = C == 0;
-#        export v;
-#    }
-#    :"NC" is op10_11=0b11 {
-#        local v:1 = C != 0;
-#        export v;
-#    }
-#}
-#
-#:"JUMP " jcond, jtgt is op13_17=0b11010 & jcond & jtgt {
-#    if(jcond == 0) goto <end>;
-#    goto [jtgt];
-#    <end>
-#}
-## Unconditional
-#:"JUMP " jtgt is op13_17=0b11010 & op12=0 & jtgt {
-#    goto [jtgt];
-#}
-#
-## CALL
-#
-#:"CALL " jcond, jtgt is op13_17=0b11000 & jcond & jtgt {
-#    if(jcond == 0) goto <end>;
-#    local tmp:2 = inst_start;
-#    push(tmp);
-#    call [jtgt];
-#    <end>
-#}
-## Unconditional
-#:"CALL " jtgt is op13_17=0b11000 & op12=0 & jtgt {
-#    local tmp:2 = inst_start;
-#    push(tmp);
-#    call [jtgt];
-#}
-#
-## RETURN
-#
-#:"RETURN " jcond  is op13_17=0b10101 & jcond & op0_9=0 {
-#    if(jcond == 0) goto <end>;
-#        SP = (SP - 1) % 32;
-#        local tmp:2 = *[stack_buffer]:2 SP;
-#        tmp = tmp + 3;
-#        return [tmp];
-#    <end>
-#}
-## Unconditional
-#:"RETURN" is op13_17=0b10101 & op12=0 & op0_9=0 {
-#    SP = (SP - 1) % 32;
-#    local tmp:2 = *[stack_buffer]:2 SP;
-#    tmp = tmp + 3;
-#    return [tmp];
-#}
-#
-## RETURNI
-#
-#:"RETURNI_ENABLE "  is op0_17=0b111000000000000001 {
-#    SP = (SP - 1) % 32;
-#    local tmp:2 = *[stack_buffer]:2 SP;
-#    enable_interrupt();
-#    return [tmp];
-#}
-#
-#:"RETURNI_DISABLE "  is op0_17=0b111000000000000000 {
-#    SP = (SP - 1) % 32;
-#    local tmp:2 = *[stack_buffer]:2 SP;
-#    disable_interrupt();
-#    return [tmp];
-#}
-#
-## ENABLE/DISABLE INTERRUPT
-#
-#
-#:ENABLE_INTERRUPT is op0_17=0b111100000000000001 {
-#    enable_interrupt();
-#}
-#
-#:DISABLE_INTERRUPT is op0_17=0b111100000000000000 {
-#    disable_interrupt();
-#}
-#
-#macro update_flags(v) {
-#    C = 0;
-#    Z = (v == 0);
-#}
-#
-## LOAD
-#
-#:LOAD reg8_11,op0_7 is op12_17=0b000000 & reg8_11 & op0_7 {
-#	reg8_11 = op0_7;
-#}
-#
-#:LOAD reg8_11,reg4_7 is op12_17=0b000001 & reg8_11 & reg4_7 & op0_3=0b0000 {
-#	reg8_11 = reg4_7;
-#}
-#
-## AND
-#
-#:AND reg8_11,op0_7 is op12_17=0b001010 & reg8_11 & op0_7 {
-#	reg8_11 = reg8_11 & op0_7;
-#    update_flags(reg8_11);
-#}
-#
-#:AND reg8_11,reg4_7 is op12_17=0b001011 & reg8_11 & reg4_7 & op0_3=0b0000 {
-#	reg8_11 = reg8_11 & reg4_7;
-#    update_flags(reg8_11);
-#}
-#
-## OR
-#
-#:OR reg8_11,op0_7 is op12_17=0b001100 & reg8_11 & op0_7 {
-#	reg8_11 = reg8_11 | op0_7;
-#    update_flags(reg8_11);
-#}
-#
-#:OR reg8_11,reg4_7 is op12_17=0b001101 & reg8_11 & reg4_7 & op0_3=0b0000 {
-#	reg8_11 = reg8_11 | reg4_7;
-#    update_flags(reg8_11);
-#}
-#
-## XOR
-#
-#:XOR reg8_11,op0_7 is op12_17=0b001110 & reg8_11 & op0_7 {
-#	reg8_11 = reg8_11 ^ op0_7;
-#    update_flags(reg8_11);
-#}
-#
-#:XOR reg8_11,reg4_7 is op12_17=0b001111 & reg8_11 & reg4_7 & op0_3=0b0000 {
-#	reg8_11 = reg8_11 ^ reg4_7;
-#    update_flags(reg8_11);
-#}
-#
-## TEST
-#define pcodeop odd_parity;
-#
-#:TEST reg8_11,op0_7 is op12_17=0b010010 & reg8_11 & op0_7 {
-#	local tmp:1 = reg8_11 & op0_7;
-#    Z = tmp == 0;
-#    C = odd_parity(tmp);
-#}
-#
-#:TEST reg8_11,reg4_7 is op12_17=0b010010 & reg8_11 & reg4_7 & op0_3=0b0000 {
-#	local tmp:1 = reg8_11 & reg4_7;
-#    Z = tmp == 0;
-#    C = odd_parity(tmp);
-#}
-#
-## ADD
-#
-#:ADD reg8_11,op0_7 is op12_17=0b011000 & reg8_11 & op0_7 {
-#	reg8_11 = reg8_11 + op0_7;
-#    C = carry(reg8_11, op0_7);
-#    Z = (reg8_11 == 0);
-#}
-#
-#:ADD reg8_11,reg4_7 is op12_17=0b011001 & reg8_11 & reg4_7 & op0_3=0b0000 {
-#	reg8_11 = reg8_11 + reg4_7;
-#    C = carry(reg8_11, reg4_7);
-#    Z = (reg8_11 == 0);
-#}
-#
-## ADDCY
-#
-#:ADDCY reg8_11,op0_7 is op12_17=0b011010 & reg8_11 & op0_7 {
-#    local tmp:1 = reg8_11 + op0_7;
-#	reg8_11 = reg8_11 + op0_7 + C;
-#    C = carry(reg8_11, op0_7) || carry(tmp, C);
-#    Z = (reg8_11 == 0);
-#}
-#
-#:ADDCY reg8_11,reg4_7 is op12_17=0b011010 & reg8_11 & reg4_7 & op0_3=0b0000 {
-#    local tmp:1 = reg8_11 + reg4_7;
-#	reg8_11 = reg8_11 + reg4_7 + C;
-#    C = carry(reg8_11, reg4_7) || carry(tmp, C);
-#    Z = (reg8_11 == 0);
-#}
-#
-## SUB
-#
-#:SUB reg8_11,op0_7 is op12_17=0b011100 & reg8_11 & op0_7 {
-#	reg8_11 = reg8_11 - op0_7;
-#    C = reg8_11 < op0_7;
-#    Z = reg8_11 == 0;
-#}
-#
-#:SUB reg8_11,reg4_7 is op12_17=0b011100 & reg8_11 & reg4_7 & op0_3=0b0000 {
-#	reg8_11 = reg8_11 - reg4_7;
-#    C = reg8_11 < reg4_7;
-#    Z = reg8_11 == 0;
-#}
-#
-## SUBCY
-#
-#:SUBCY reg8_11,op0_7 is op12_17=0b011110 & reg8_11 & op0_7 {
-#    local tmp:1 = reg8_11 - op0_7;
-#	reg8_11 = reg8_11 - op0_7 - C;
-#    C = reg8_11 < op0_7 || tmp < C;
-#    Z = (reg8_11 == 0);
-#}
-#
-#:SUBCY reg8_11,reg4_7 is op12_17=0b011111 & reg8_11 & reg4_7 & op0_3=0b0000 {
-#    local tmp:1 = reg8_11 - reg4_7;
-#	reg8_11 = reg8_11 - reg4_7 - C;
-#    C = reg8_11 < reg4_7 || tmp < C;
-#    Z = (reg8_11 == 0);
-#}
-#
-## COMPARE
-#
-#:COMPARE reg8_11,op0_7 is op12_17=0b010100 & reg8_11 & op0_7 {
-#    Z = (reg8_11 == op0_7);
-#    C = (reg8_11 < op0_7);
-#}
-#
-#:COMPARE reg8_11,reg4_7 is op12_17=0b010101 & reg8_11 & reg4_7 & op0_3=0b0000 {
-#    Z = (reg8_11 == reg4_7);
-#    C = (reg8_11 < reg4_7);
-#}
-#
-## SR0 / SR1 / SRX / SRA / RR
-#
-#:SR0 reg8_11 is op12_17=0b100000 & reg8_11 & op3_7=0b00001 & op0_2=0b110 {
-#    C = reg8_11 & 1;
-#    reg8_11 = reg8_11 >> 1;
-#    Z = reg8_11 == 0;
-#}
-#:SR1 reg8_11 is op12_17=0b100000 & reg8_11 & op3_7=0b00001 & op0_2=0b111 {
-#    Z = 0;
-#    C = reg8_11 & 1;
-#    reg8_11 = (0b10000000 | ( reg8_11 >> 1));
-#}
-#:SRX reg8_11 is op12_17=0b100000 & reg8_11 & op3_7=0b00001 & op0_2=0b010 {
-#    C = reg8_11 & 1;
-#    reg8_11 = (( reg8_11 & 0b10000000) | ( reg8_11 >> 1));
-#    Z = reg8_11 == 0;
-#}
-#:SRA reg8_11 is op12_17=0b100000 & reg8_11 & op3_7=0b00001 & op0_2=0b000 {
-#    local tmp:1 = reg8_11 & 1;
-#    reg8_11 = (( C << 7) | ( reg8_11 >> 1));
-#    C = tmp;
-#    Z = reg8_11 == 0;
-#}
-#:RR reg8_11 is op12_17=0b100000 & reg8_11 & op3_7=0b00001 & op0_2=0b100 {
-#    C = reg8_11 & 1;
-#    reg8_11 = (( C << 7) | ( reg8_11 >> 1));
-#    Z = reg8_11 == 0;
-#}
-#
-## SL0 / SL1 / SLX / SLA / RL
-#:SL0 reg8_11 is op12_17=0b100000 & reg8_11 & op3_7=0b00000 & op0_2=0b110 {
-#    C = reg8_11 >> 7;
-#    reg8_11 = reg8_11 << 1;
-#    Z = reg8_11 == 0;
-#}
-#:SL1 reg8_11 is op12_17=0b100000 & reg8_11 & op3_7=0b00000 & op0_2=0b111 {
-#    Z = 0;
-#    C = reg8_11 >> 7;
-#    reg8_11 = (1 | ( reg8_11 << 1));
-#}
-#:SLX reg8_11 is op12_17=0b100000 & reg8_11 & op3_7=0b00000 & op0_2=0b010 {
-#    C = reg8_11 >> 7;
-#    reg8_11 = (( reg8_11 & 1) | ( reg8_11 << 1));
-#    Z = reg8_11 == 0;
-#}
-#:SLA reg8_11 is op12_17=0b100000 & reg8_11 & op3_7=0b00000 & op0_2=0b000 {
-#    local tmp:1 = reg8_11 >> 7;
-#    reg8_11 = ( C | ( reg8_11 << 1));
-#    C = tmp;
-#    Z = reg8_11 == 0;
-#}
-#:RL reg8_11 is op12_17=0b100000 & reg8_11 & op3_7=0b00000 & op0_2=0b100 {
-#    C = reg8_11 >> 7;
-#    reg8_11 = (( C ) | ( reg8_11 << 1));
-#    Z = reg8_11 == 0;
-#}
-#
-## OUTPUT
-#
-#define pcodeop output;
-#
-#:OUTPUT reg8_11,op0_7 is op12_17=0b101100 & reg8_11 & op0_7 {
-#    output(reg8_11, op0_7:1);
-#}
-#
-#:OUTPUT reg8_11,reg4_7 is op12_17=0b101101 & reg8_11 & reg4_7 & op0_3=0b0000 {
-#    output(reg8_11, reg4_7);
-#}
-#
-## INPUT
-#
-#define pcodeop input;
-#
-#:INPUT reg8_11,op0_7 is op12_17=0b000100 & reg8_11 & op0_7 {
-#    reg8_11 = input(op0_7:1);
-#}
-#
-#:INPUT reg8_11,reg4_7 is op12_17=0b000101 & reg8_11 & reg4_7 & op0_3=0b0000 {
-#    reg8_11 = input(reg4_7);	
-#}
-#
-## STORE
-#
-#:STORE reg8_11,op0_5 is op12_17=0b101110 & reg8_11 & op6_7=0 & op0_5 {
-#    *[scratchpad]:1 op0_5:1 = reg8_11;
-#}
-#
-#:STORE reg8_11,reg4_7 is op12_17=0b101111 & reg8_11 & reg4_7 & op0_3=0b0000 {
-#    *[scratchpad]:1 reg4_7 = reg8_11;
-#}
-#
-## FETCH
-#
-#:FETCH reg8_11,op0_5 is op12_17=0b000110 & reg8_11 & op6_7=0 & op0_5 {
-#    reg8_11 = *[scratchpad]:1 op0_5:1;
-#}
-#
-#:FETCH reg8_11,reg4_7 is op12_17=0b000111 & reg8_11 & reg4_7 & op0_3=0b0000 {
-#    reg8_11 = *[scratchpad]:1 reg4_7;
-#}
