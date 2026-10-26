@@ -205,14 +205,14 @@ define pcodeop odd_parity;
 # ADD
 
 :ADD reg8_11,op0_7 is op12_17=0b011000 & reg8_11 & op0_7 {
-	reg8_11 = reg8_11 + op0_7;
     C = carry(reg8_11, op0_7);
+	reg8_11 = reg8_11 + op0_7;
     Z = (reg8_11 == 0);
 }
 
 :ADD reg8_11,reg4_7 is op12_17=0b011001 & reg8_11 & reg4_7 & op0_3=0b0000 {
-	reg8_11 = reg8_11 + reg4_7;
     C = carry(reg8_11, reg4_7);
+	reg8_11 = reg8_11 + reg4_7;
     Z = (reg8_11 == 0);
 }
 
@@ -220,15 +220,17 @@ define pcodeop odd_parity;
 
 :ADDCY reg8_11,op0_7 is op12_17=0b011010 & reg8_11 & op0_7 {
     local tmp:1 = reg8_11 + op0_7;
-	reg8_11 = reg8_11 + op0_7 + C;
+    local old_c:1 = C;
     C = carry(reg8_11, op0_7) || carry(tmp, C);
+	reg8_11 = reg8_11 + op0_7 + old_c;
     Z = (reg8_11 == 0);
 }
 
-:ADDCY reg8_11,reg4_7 is op12_17=0b011010 & reg8_11 & reg4_7 & op0_3=0b0000 {
+:ADDCY reg8_11,reg4_7 is op12_17=0b011011 & reg8_11 & reg4_7 & op0_3=0b0000 {
     local tmp:1 = reg8_11 + reg4_7;
-	reg8_11 = reg8_11 + reg4_7 + C;
+    local old_c:1 = C;
     C = carry(reg8_11, reg4_7) || carry(tmp, C);
+	reg8_11 = reg8_11 + reg4_7 + old_c;
     Z = (reg8_11 == 0);
 }
 
@@ -240,7 +242,7 @@ define pcodeop odd_parity;
     Z = reg8_11 == 0;
 }
 
-:SUB reg8_11,reg4_7 is op12_17=0b011100 & reg8_11 & reg4_7 & op0_3=0b0000 {
+:SUB reg8_11,reg4_7 is op12_17=0b011101 & reg8_11 & reg4_7 & op0_3=0b0000 {
     C = reg8_11 < reg4_7;
 	reg8_11 = reg8_11 - reg4_7;
     Z = reg8_11 == 0;
@@ -250,15 +252,17 @@ define pcodeop odd_parity;
 
 :SUBCY reg8_11,op0_7 is op12_17=0b011110 & reg8_11 & op0_7 {
     local tmp:1 = reg8_11 - op0_7;
-	reg8_11 = reg8_11 - op0_7 - C;
+    local old_c:1 = C;
     C = reg8_11 < op0_7 || tmp < C;
+	reg8_11 = reg8_11 - op0_7 - old_c;
     Z = (reg8_11 == 0);
 }
 
 :SUBCY reg8_11,reg4_7 is op12_17=0b011111 & reg8_11 & reg4_7 & op0_3=0b0000 {
     local tmp:1 = reg8_11 - reg4_7;
-	reg8_11 = reg8_11 - reg4_7 - C;
+    local old_c:1 = C;
     C = reg8_11 < reg4_7 || tmp < C;
+	reg8_11 = reg8_11 - reg4_7 - old_c;
     Z = (reg8_11 == 0);
 }
 
@@ -316,7 +320,7 @@ define pcodeop odd_parity;
     C = reg8_11 >> 7;
     reg8_11 = (1 | ( reg8_11 << 1));
 }
-:SLX reg8_11 is op12_17=0b100000 & reg8_11 & op3_7=0b00000 & op0_2=0b010 {
+:SLX reg8_11 is op12_17=0b100000 & reg8_11 & op3_7=0b00000 & op0_2=0b100 {
     C = reg8_11 >> 7;
     reg8_11 = (( reg8_11 & 1) | ( reg8_11 << 1));
     Z = reg8_11 == 0;
@@ -327,7 +331,7 @@ define pcodeop odd_parity;
     C = tmp;
     Z = reg8_11 == 0;
 }
-:RL reg8_11 is op12_17=0b100000 & reg8_11 & op3_7=0b00000 & op0_2=0b100 {
+:RL reg8_11 is op12_17=0b100000 & reg8_11 & op3_7=0b00000 & op0_2=0b010 {
     local new_c:1 = reg8_11 >> 7;
     reg8_11 = (( C ) | ( reg8_11 << 1));
     C = new_c;
