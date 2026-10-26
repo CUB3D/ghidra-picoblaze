@@ -33,7 +33,9 @@ define bitrange regBank=flags[2,1];
 
 macro push(v) {
 	# In KCPSM6 stack overflow is a reset rather than a wraparound
-    *[stack_buffer]:2 SP = v;
+    local dst:2 = SP << 1;
+    *[stack_buffer]:2 dst = v;
+    SP = (SP + 1) % 32;
 }
 
 # Loading
@@ -50,6 +52,11 @@ define pcodeop move_banks;
 
 :STAR sX, sY is opc=0x16 & sX & sY & op0_3=0 {
 	move_banks(sX, sY);
+}
+
+# Not documented in the ISA spec, but assemblers do support it
+:STAR sX, kk is opc=0x17 & sX & kk & op0_3=0 {
+	move_banks(sX, kk);
 }
 
 # Logical
@@ -311,14 +318,18 @@ define pcodeop output;
 define pcodeop restore_interrupt_flags;
 :RETURNI_DISABLE is ins=0x29000 {
     SP = SP - 1;
-    local tmp:2 = *[stack_buffer]:2 SP;
+    local dst:2 = SP << 1;
+    local tmp:2 = *[stack_buffer]:2 dst;
+    tmp = tmp + 3;
     disable_interrupt();
     flags = restore_interrupt_flags();
     return [tmp];
 }
 :RETURNI_ENABLE is ins=0x29001 {
     SP = SP - 1;
-    local tmp:2 = *[stack_buffer]:2 SP;
+    local dst:2 = SP << 1;
+    local tmp:2 = *[stack_buffer]:2 dst;
+    tmp = tmp + 3;
     enable_interrupt();
     flags = restore_interrupt_flags();
     return [tmp];
@@ -365,12 +376,14 @@ jcond:"NC" is op14_16=0b111 { local a:1 = C == 0; export a; }
 	local tmp:2 = inst_start;
     push(tmp);
 	local tmp2:2 = zext(sY) | ((zext(sX) & 0xF) << 8);
+    tmp2 = tmp2 * 3;
 	call [tmp2];
 }
 
 :RETURN is ins=0x25000 {
     SP = SP - 1;
-    local tmp:2 = *[stack_buffer]:2 SP;
+    local dst:2 = SP << 1;
+    local tmp:2 = *[stack_buffer]:2 dst;
     tmp = tmp + 3;
     return [tmp];
 }
