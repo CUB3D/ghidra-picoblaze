@@ -31,7 +31,8 @@ attach variables [ reg8_11 reg4_7 ] [
 
 
 macro push(v) {
-    *[stack_buffer]:2 SP = v;
+    local dst:1 = SP << 1;
+    *[stack_buffer]:2 dst = v;
     SP = (SP + 1) % 32;
 }
 
@@ -94,7 +95,8 @@ with jcond: op12=1 {
 :RETURN jcond  is op13_17=0b10101 & jcond & op0_9=0 {
     if(jcond == 0) goto <end>;
         SP = (SP - 1) % 32;
-        local tmp:2 = *[stack_buffer]:2 SP;
+        local dst:1 = SP << 1;
+        local tmp:2 = *[stack_buffer]:2 dst;
         tmp = tmp + 3;
         return [tmp];
     <end>
@@ -102,7 +104,8 @@ with jcond: op12=1 {
 # Unconditional
 :RETURN is op13_17=0b10101 & op12=0 & op0_9=0 {
     SP = (SP - 1) % 32;
-    local tmp:2 = *[stack_buffer]:2 SP;
+    local dst:1 = SP << 1;
+    local tmp:2 = *[stack_buffer]:2 dst;
     tmp = tmp + 3;
     return [tmp];
 }
@@ -111,7 +114,8 @@ with jcond: op12=1 {
 
 :RETURNI_ENABLE  is op0_17=0b111000000000000001 {
     SP = (SP - 1) % 32;
-    local tmp:2 = *[stack_buffer]:2 SP;
+    local dst:1 = SP << 1;
+    local tmp:2 = *[stack_buffer]:2 dst;
     tmp = tmp + 3;
     enable_interrupt();
     return [tmp];
@@ -119,7 +123,8 @@ with jcond: op12=1 {
 
 :RETURNI_DISABLE  is op0_17=0b111000000000000000 {
     SP = (SP - 1) % 32;
-    local tmp:2 = *[stack_buffer]:2 SP;
+    local dst:1 = SP << 1;
+    local tmp:2 = *[stack_buffer]:2 dst;
     tmp = tmp + 3;
     disable_interrupt();
     return [tmp];
